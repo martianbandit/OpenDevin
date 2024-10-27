@@ -1,4 +1,4 @@
-from opendevin.agent import Agent
-from .codeact_agent import CodeActAgent
+from agenthub.codeact_agent.codeact_agent import CodeActAgent
+from openhands.controller.agent import Agent
 
-Agent.register("CodeActAgent", CodeActAgent)
+Agent.register('CodeActAgent', CodeActAgent)

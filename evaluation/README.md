@@ -3,77 +3,74 @@
 This folder contains code and resources to run experiments and evaluations.
 
 ## Logistics
+
 To better organize the evaluation folder, we should follow the rules below:
-  - Each subfolder contains a specific benchmark or experiment. For example, `evaluation/SWE-bench` should contain
+
+- Each subfolder contains a specific benchmark or experiment. For example, `evaluation/swe_bench` should contain
 all the preprocessing/evaluation/analysis scripts.
-  - Raw data and experimental records should not be stored within this repo (e.g. Google Drive or Hugging Face Datasets).
-  - Important data files of manageable size and analysis scripts (e.g., jupyter notebooks) can be directly uploaded to this repo.
+- Raw data and experimental records should not be stored within this repo.
+- For model outputs, they should be stored at [this huggingface space](https://huggingface.co/spaces/OpenHands/evaluation) for visualization.
+- Important data files of manageable size and analysis scripts (e.g., jupyter notebooks) can be directly uploaded to this repo.
 
-## Roadmap
+## Supported Benchmarks
 
-- Sanity check. Reproduce Devin's scores on SWE-bench using the released outputs to make sure that our harness pipeline works.
-- Open source model support.
-  - Contributors are encouraged to submit their commits to our [forked SEW-bench repo](https://github.com/OpenDevin/SWE-bench).
-  - Ensure compatibility with OpenAI interface for inference.
-  - Serve open source models, prioritizing high concurrency and throughput.
+To learn more about how to integrate your benchmark into OpenHands, check out [tutorial here](https://docs.all-hands.dev/modules/usage/how-to/evaluation-harness).
 
-## SWE-bench
-- notebooks
-  - `devin_eval_analysis.ipynb`: notebook analyzing devin's outputs
-- scripts
-  - `prepare_devin_outputs_for_evaluation.py`: script fetching and converting [devin's output](https://github.com/CognitionAI/devin-swebench-results/tree/main) into the desired json file for evaluation.
-    - usage: `python prepare_devin_outputs_for_evaluation.py <setting>` where setting can be `passed`, `failed` or `all`
-- resources
-  - Devin related SWE-bench test subsets
-    - [🤗 OpenDevin/SWE-bench-devin-passed](https://huggingface.co/datasets/OpenDevin/SWE-bench-devin-passed)
-    - [🤗 OpenDevin/SWE-bench-devin-full-filtered](https://huggingface.co/datasets/OpenDevin/SWE-bench-devin-full-filtered)
-  - Devin's outputs processed for evaluations is available on [Huggingface](https://huggingface.co/datasets/OpenDevin/Devin-SWE-bench-output)
-    - get predictions that passed the test: `wget https://huggingface.co/datasets/OpenDevin/Devin-SWE-bench-output/raw/main/devin_swe_passed.json`
-    - get all predictions `wget https://huggingface.co/datasets/OpenDevin/Devin-SWE-bench-output/raw/main/devin_swe_outputs.json`
+### Software Engineering
 
-See [`SWE-bench/README.md`](./SWE-bench/README.md) for more details on how to run SWE-Bench for evaluation.
+- SWE-Bench: [`evaluation/swe_bench`](./swe_bench)
+- HumanEvalFix: [`evaluation/humanevalfix`](./humanevalfix)
+- BIRD: [`evaluation/bird`](./bird)
+- BioCoder: [`evaluation/ml_bench`](./ml_bench)
+- ML-Bench: [`evaluation/ml_bench`](./ml_bench)
+- APIBench: [`evaluation/gorilla`](./gorilla/)
+- ToolQA: [`evaluation/toolqa`](./toolqa/)
+- AiderBench: [`evaluation/aider_bench`](./aider_bench/)
 
-### Results
+### Web Browsing
 
-We have refined the original SWE-bench evaluation pipeline to enhance its efficiency and reliability. The updates are as follows:
-- Reuse testbeds and Conda environments.
-- Additionally try `patch` command for patch application if `git apply` command fails.
+- WebArena: [`evaluation/webarena`](./webarena/)
+- MiniWob++: [`evaluation/miniwob`](./miniwob/)
 
-#### Results on SWE-bench-devin-passed
+### Misc. Assistance
 
-[🤗 OpenDevin/SWE-bench-devin-passed](https://huggingface.co/datasets/OpenDevin/SWE-bench-devin-passed)
+- GAIA: [`evaluation/gaia`](./gaia)
+- GPQA: [`evaluation/gpqa`](./gpqa)
+- AgentBench: [`evaluation/agent_bench`](./agent_bench)
+- MINT: [`evaluation/mint`](./mint)
+- Entity deduction Arena (EDA): [`evaluation/EDA`](./EDA)
+- ProofWriter: [`evaluation/logic_reasoning`](./logic_reasoning)
 
-| Model/Agent            | #instances | #init | #apply | #resolve |
-|------------------------|------------|-------|--------|----------|
-| Gold                   | 79         | 79    | 79     | 79       |
-| Devin                  | 79         | 79    | 76     | 76       |
+## Before everything begins: Setup Environment and LLM Configuration
 
-#init: number of instances where testbeds have been successfully initialized.
+Please follow instruction [here](https://github.com/All-Hands-AI/OpenHands/blob/main/Development.md) to setup your local development environment and LLM.
 
-In the 3 Devin-failed instances (see below), Devin has made changes to the tests, which are incompatible with the provided test patch and causes failures during patch application. The evaluation adopted by Devin does not seem to align with the original SWE-bench evaluation.
+OpenHands in development mode uses `config.toml` to keep track of most configurations.
 
-```shell
-django__django-11244
-scikit-learn__scikit-learn-10870
-sphinx-doc__sphinx-9367
+Here's an example configuration file you can use to define and use multiple LLMs:
+
+```toml
+[llm]
+# IMPORTANT: add your API key here, and set the model to the one you want to evaluate
+model = "gpt-4o-2024-05-13"
+api_key = "sk-XXX"
+
+[llm.eval_gpt4_1106_preview_llm]
+model = "gpt-4-1106-preview"
+api_key = "XXX"
+temperature = 0.0
+
+[llm.eval_some_openai_compatible_model_llm]
+model = "openai/MODEL_NAME"
+base_url = "https://OPENAI_COMPATIBLE_URL/v1"
+api_key = "XXX"
+temperature = 0.0
 ```
 
-#### Results on SWE-bench-devin-failed
+### Result Visualization
 
-| Model/Agent            | #instances | #init | #apply | #resolve |
-|------------------------|------------|-------|--------|----------|
-| Gold                   | 491        | 491   | 491    | 371      |
-| Devin                  | 491        | 491   | 463    | 7        |
+Check [this huggingface space](https://huggingface.co/spaces/OpenHands/evaluation) for visualization of existing experimental results.
 
-Devin **passes** 7 instances on the `SWE-bench-devin-failed` subset. SWE-bench dataset appears to be noisy, evidenced by 120 instances where gold patches do not pass.
+### Upload your results
 
-We have filtered out the problematic 120 instances, resulting in the creation of the `SWE-bench-devin-full-filtered` subset.
-
-## Results on SWE-bench-devin-full-filtered
-
-[🤗 OpenDevin/SWE-bench-devin-full-filtered](https://huggingface.co/datasets/OpenDevin/SWE-bench-devin-full-filtered)
-
-| Model/Agent            | #instances | #init | #apply | #resolve |
-|------------------------|------------|-------|--------|----------|
-| Gold                   | 450        | 450   | 450    | 450      |
-| Devin                  | 450        | 450   | 426    | 83       |
+You can start your own fork of [our huggingface evaluation outputs](https://huggingface.co/spaces/OpenHands/evaluation) and submit a PR of your evaluation results to our hosted huggingface repo via PR following the guide [here](https://huggingface.co/docs/hub/en/repositories-pull-requests-discussions#pull-requests-and-discussions).

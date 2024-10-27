@@ -1,46 +1,15 @@
-import json
-from typing import List, Tuple, Dict, Type
-
-from opendevin.controller.agent_controller import print_with_color
-from opendevin.plan import Plan
-from opendevin.action import Action, action_from_dict
-from opendevin.observation import Observation
-from opendevin.schema import ActionType
-
-from opendevin.action import (
+from openhands.controller.state.state import State
+from openhands.core.logger import openhands_logger as logger
+from openhands.core.schema import ActionType
+from openhands.core.utils import json
+from openhands.events.action import (
+    Action,
     NullAction,
-    CmdRunAction,
-    CmdKillAction,
-    BrowseURLAction,
-    FileReadAction,
-    FileWriteAction,
-    AgentRecallAction,
-    AgentThinkAction,
-    AgentFinishAction,
-    AgentSummarizeAction,
-    AddTaskAction,
-    ModifyTaskAction,
 )
+from openhands.events.serialization.action import action_from_dict
+from openhands.events.serialization.event import event_to_memory
 
-from opendevin.observation import (
-    NullObservation,
-)
-
-ACTION_TYPE_TO_CLASS: Dict[str, Type[Action]] = {
-    ActionType.RUN: CmdRunAction,
-    ActionType.KILL: CmdKillAction,
-    ActionType.BROWSE: BrowseURLAction,
-    ActionType.READ: FileReadAction,
-    ActionType.WRITE: FileWriteAction,
-    ActionType.RECALL: AgentRecallAction,
-    ActionType.THINK: AgentThinkAction,
-    ActionType.SUMMARIZE: AgentSummarizeAction,
-    ActionType.FINISH: AgentFinishAction,
-    ActionType.ADD_TASK: AddTaskAction,
-    ActionType.MODIFY_TASK: ModifyTaskAction,
-}
-
-HISTORY_SIZE = 10
+HISTORY_SIZE = 20
 
 prompt = """
 # Task
@@ -105,25 +74,23 @@ It must be an object, and it must contain two fields:
   * `content` - the content to write to the file
 * `run` - runs a command on the command line in a Linux shell. Arguments:
   * `command` - the command to run
-  * `background` - if true, run the command in the background, so that other commands can be run concurrently. Useful for e.g. starting a server. You won't be able to see the logs. You don't need to end the command with `&`, just set this to true.
-* `kill` - kills a background command
-  * `id` - the ID of the background command to kill
 * `browse` - opens a web page. Arguments:
   * `url` - the URL to open
-* `think` - make a plan, set a goal, or record your thoughts. Arguments:
-  * `thought` - the thought to record
+* `message` - make a plan, set a goal, record your thoughts, or ask for more input from the user. Arguments:
+  * `content` - the message to record
+  * `wait_for_response` - set to `true` to wait for the user to respond before proceeding
 * `add_task` - add a task to your plan. Arguments:
-  * `parent` - the ID of the parent task
+  * `parent` - the ID of the parent task (leave empty if it should go at the top level)
   * `goal` - the goal of the task
   * `subtasks` - a list of subtasks, each of which is a map with a `goal` key.
 * `modify_task` - close a task. Arguments:
-  * `id` - the ID of the task to close
+  * `task_id` - the ID of the task to close
   * `state` - set to 'in_progress' to start the task, 'completed' to finish it, 'verified' to assert that it was successful, 'abandoned' to give up on it permanently, or `open` to stop working on it for now.
 * `finish` - if ALL of your tasks and subtasks have been verified or abandoned, and you're absolutely certain that you've completed your task and have tested your work, use the finish action to stop working.
 
-You MUST take time to think in between read, write, run, browse, and recall actions.
+You MUST take time to think in between read, write, run, and browse actions--do this with the `message` action.
 You should never act twice in a row without thinking. But if your last several
-actions are all `think` actions, you should consider taking a different action.
+actions are all `message` actions, you should consider taking a different action.
 
 What is your next thought or action? Again, you must reply with JSON, and only with JSON.
 
@@ -131,99 +98,94 @@ What is your next thought or action? Again, you must reply with JSON, and only w
 """
 
 
-def get_prompt(plan: Plan, history: List[Tuple[Action, Observation]]) -> str:
-    """
-    Gets the prompt for the planner agent.
+def get_hint(latest_action_id: str) -> str:
+    """Returns action type hint based on given action_id"""
+    hints = {
+        '': "You haven't taken any actions yet. Start by using `ls` to check out what files you're working with.",
+        ActionType.RUN: 'You should think about the command you just ran, what output it gave, and how that affects your plan.',
+        ActionType.READ: 'You should think about the file you just read, what you learned from it, and how that affects your plan.',
+        ActionType.WRITE: 'You just changed a file. You should think about how it affects your plan.',
+        ActionType.BROWSE: 'You should think about the page you just visited, and what you learned from it.',
+        ActionType.MESSAGE: "Look at your last thought in the history above. What does it suggest? Don't think anymore--take action.",
+        ActionType.ADD_TASK: 'You should think about the next action to take.',
+        ActionType.MODIFY_TASK: 'You should think about the next action to take.',
+        ActionType.SUMMARIZE: '',
+        ActionType.FINISH: '',
+    }
+    return hints.get(latest_action_id, '')
+
+
+def get_prompt_and_images(
+    state: State, max_message_chars: int
+) -> tuple[str, list[str]]:
+    """Gets the prompt for the planner agent.
+
     Formatted with the most recent action-observation pairs, current task, and hint based on last action
 
     Parameters:
-    - plan (Plan): The original plan outlined by the user with LLM defined tasks
-    - history (List[Tuple[Action, Observation]]): List of corresponding action-observation pairs
+    - state (State): The state of the current agent
 
     Returns:
     - str: The formatted string prompt with historical values
     """
+    # the plan
+    plan_str = json.dumps(state.root_task.to_dict(), indent=2)
 
-    plan_str = json.dumps(plan.task.to_dict(), indent=2)
-    sub_history = history[-HISTORY_SIZE:]
+    # the history
     history_dicts = []
     latest_action: Action = NullAction()
-    for action, observation in sub_history:
-        if not isinstance(action, NullAction):
-            history_dicts.append(action.to_dict())
-            latest_action = action
-        if not isinstance(observation, NullObservation):
-            observation_dict = observation.to_dict()
-            if (
-                "extras" in observation_dict
-                and "screenshot" in observation_dict["extras"]
-            ):
-                del observation_dict["extras"]["screenshot"]
-            history_dicts.append(observation_dict)
+
+    # retrieve the latest HISTORY_SIZE events
+    for event_count, event in enumerate(state.history.get_events(reverse=True)):
+        if event_count >= HISTORY_SIZE:
+            break
+        if latest_action == NullAction() and isinstance(event, Action):
+            latest_action = event
+        history_dicts.append(event_to_memory(event, max_message_chars))
+
+    # history_dicts is in reverse order, lets fix it
+    history_dicts.reverse()
+
+    # and get it as a JSON string
     history_str = json.dumps(history_dicts, indent=2)
 
-    hint = ""
-    current_task = plan.get_current_task()
+    # the plan status
+    current_task = state.root_task.get_current_task()
     if current_task is not None:
         plan_status = f"You're currently working on this task:\n{current_task.goal}."
         if len(current_task.subtasks) == 0:
             plan_status += "\nIf it's not achievable AND verifiable with a SINGLE action, you MUST break it down into subtasks NOW."
     else:
         plan_status = "You're not currently working on any tasks. Your next action MUST be to mark a task as in_progress."
-        hint = plan_status
 
-    latest_action_id = latest_action.to_dict()["action"]
+    # the hint, based on the last action
+    hint = get_hint(event_to_memory(latest_action, max_message_chars).get('action', ''))
+    logger.info('HINT:\n' + hint, extra={'msg_type': 'DETAIL'})
 
-    if current_task is not None:
-        if latest_action_id == "":
-            hint = "You haven't taken any actions yet. Start by using `ls` to check out what files you're working with."
-        elif latest_action_id == ActionType.RUN:
-            hint = "You should think about the command you just ran, what output it gave, and how that affects your plan."
-        elif latest_action_id == ActionType.READ:
-            hint = "You should think about the file you just read, what you learned from it, and how that affects your plan."
-        elif latest_action_id == ActionType.WRITE:
-            hint = "You just changed a file. You should think about how it affects your plan."
-        elif latest_action_id == ActionType.BROWSE:
-            hint = "You should think about the page you just visited, and what you learned from it."
-        elif latest_action_id == ActionType.THINK:
-            hint = "Look at your last thought in the history above. What does it suggest? Don't think anymore--take action."
-        elif latest_action_id == ActionType.RECALL:
-            hint = "You should think about the information you just recalled, and how it should affect your plan."
-        elif latest_action_id == ActionType.ADD_TASK:
-            hint = "You should think about the next action to take."
-        elif latest_action_id == ActionType.MODIFY_TASK:
-            hint = "You should think about the next action to take."
-        elif latest_action_id == ActionType.SUMMARIZE:
-            hint = ""
-        elif latest_action_id == ActionType.FINISH:
-            hint = ""
+    # the last relevant user message (the task)
+    message, image_urls = state.get_current_user_intent()
 
-    print_with_color("HINT:\n" + hint, "INFO")
+    # finally, fill in the prompt
     return prompt % {
-        "task": plan.main_goal,
-        "plan": plan_str,
-        "history": history_str,
-        "hint": hint,
-        "plan_status": plan_status,
-    }
+        'task': message,
+        'plan': plan_str,
+        'history': history_str,
+        'hint': hint,
+        'plan_status': plan_status,
+    }, image_urls
 
 
 def parse_response(response: str) -> Action:
-    """
-    Parses the model output to find a valid action to take
-
+    """Parses the model output to find a valid action to take
     Parameters:
     - response (str): A response from the model that potentially contains an Action.
 
     Returns:
     - Action: A valid next action to perform from model output
     """
-    json_start = response.find("{")
-    json_end = response.rfind("}") + 1
-    response = response[json_start:json_end]
     action_dict = json.loads(response)
-    if "contents" in action_dict:
+    if 'contents' in action_dict:
         # The LLM gets confused here. Might as well be robust
-        action_dict["content"] = action_dict.pop("contents")
+        action_dict['content'] = action_dict.pop('contents')
     action = action_from_dict(action_dict)
     return action

@@ -10,11 +10,12 @@
   --bg-editor-active: #31343D;
   --border-editor-sidebar: #3C3C4A;
   background-color: var(--neutral-900) !important;
+  --bg-neutral-muted: #afb8c133;
 }
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+  font-family: -apple-system, "SF Pro", BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
     "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
     sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -26,21 +27,40 @@ code {
     monospace;
 }
 
-.editor-accordion h2 > button{
+.markdown-body code {
+  padding: 0.2em 0.4em;
+  margin: 0;
+  font-size: 85%;
+  white-space: break-spaces;
+  background-color: var(--bg-neutral-muted);
+  border-radius: 6px;
+}
+
+.markdown-body pre code {
   padding: 0;
+  background-color: inherit;
 }
 
-.editor-accordion-title {
-  color: var(--bg-neutral-400) !important;
+.markdown-body {
+  white-space: pre-wrap; /* Handles line breaks */
 }
 
-.editor-accordion-content {
-  padding-top: 0 !important;
-  padding-bottom: 0 !important;
+.markdown-body ol {
+  list-style-type: decimal; /* Handles numbered lists */
+  margin-left: 20px;
+  padding-left: 0.5em; /* Adds some indentation */
 }
 
-.editor-accordion-content ul {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+.markdown-body ul {
+  list-style-type: disc; /* Handles bullet points */
+  margin-left: 20px;
+  padding-left: 0.5em; /* Adds some indentation */
+}
+
+.markdown-body th {
+  text-align: left;
+}
+
+.markdown-body th, .markdown-body td {
+  padding: 0.1rem 1rem;
 }

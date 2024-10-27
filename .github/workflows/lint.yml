@@ -1,42 +1,49 @@
+# Workflow that runs lint on the frontend and python code
 name: Lint
 
-on: [push, pull_request]
+# The jobs in this workflow are required, so they must run at all times
+# Always run on "main"
+# Always run on PRs
+on:
+  push:
+    branches:
+    - main
+  pull_request:
 
 jobs:
+  # Run lint on the frontend code
   lint-frontend:
+    name: Lint frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - name: Install dependencies
         run: |
           cd frontend
           npm install --frozen-lockfile
-
       - name: Lint
         run: |
           cd frontend
           npm run lint
 
+  # Run lint on the python code
   lint-python:
     name: Lint python
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up python
         uses: actions/setup-python@v5
         with:
           python-version: 3.11
-      - name: Create mypy cache directory
-        run: mkdir -p .mypy_cache
-      - name: Install dependencies
-        run: pip install ruff mypy==1.9.0 types-PyYAML types-toml
-      - name: Run mypy
-        run: python -m mypy --install-types --non-interactive --config-file dev_config/python/mypy.ini opendevin/ agenthub/
-      - name: Run ruff
-        run: ruff check --config dev_config/python/ruff.toml opendevin/ agenthub/
+          cache: 'pip'
+      - name: Install pre-commit
+        run: pip install pre-commit==3.7.0
+      - name: Run pre-commit hooks
+        run: pre-commit run --files openhands/**/* agenthub/**/* evaluation/**/* tests/**/* --show-diff-on-failure --config ./dev_config/python/.pre-commit-config.yaml
