@@ -7,10 +7,14 @@ from openhands.storage.files import FileStore
 class InMemoryFileStore(FileStore):
     files: dict[str, str]
 
-    def __init__(self):
+    def __init__(self, files: dict[str, str] | None = None) -> None:
         self.files = {}
+        if files is not None:
+            self.files = files
 
-    def write(self, path: str, contents: str) -> None:
+    def write(self, path: str, contents: str | bytes) -> None:
+        if isinstance(contents, bytes):
+            contents = contents.decode('utf-8')
         self.files[path] = contents
 
     def read(self, path: str) -> str:

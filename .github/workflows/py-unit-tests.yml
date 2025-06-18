@@ -10,103 +10,59 @@ on:
       - main
   pull_request:
 
+# If triggered by a PR, it will be in the same group. However, each commit on main will be in its own unique group
+concurrency:
+  group: ${{ github.workflow }}-${{ (github.head_ref && github.ref) || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
-  # Run python unit tests on macOS
-  test-on-macos:
-    name: Python Unit Tests on macOS
-    runs-on: macos-12
-    env:
-      INSTALL_DOCKER: '1' # Set to '0' to skip Docker installation
-    strategy:
-      matrix:
-        python-version: ['3.11']
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Cache Poetry dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/pypoetry
-            ~/.virtualenvs
-          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-poetry-
-      - name: Install poetry via pipx
-        run: pipx install poetry
-      - name: Install Python dependencies using Poetry
-        run: poetry install --without evaluation,llama-index
-      - name: Install & Start Docker
-        if: env.INSTALL_DOCKER == '1'
-        run: |
-          INSTANCE_NAME="colima-${GITHUB_RUN_ID}"
-
-          # Uninstall colima to upgrade to the latest version
-          if brew list colima &>/dev/null; then
-            brew uninstall colima
-            # unlinking colima dependency: go
-            brew uninstall go@1.21
-          fi
-          rm -rf ~/.colima ~/.lima
-          brew install --HEAD colima
-          brew install docker
-
-          start_colima() {
-            # Find a free port in the range 10000-20000
-            RANDOM_PORT=$((RANDOM % 10001 + 10000))
-
-            # Original line:
-            if ! colima start --network-address --arch x86_64 --cpu=1 --memory=1 --verbose --ssh-port $RANDOM_PORT; then
-              echo "Failed to start Colima."
-              return 1
-            fi
-            return 0
-          }
-
-          # Attempt to start Colima for 5 total attempts:
-          ATTEMPT_LIMIT=5
-          for ((i=1; i<=ATTEMPT_LIMIT; i++)); do
-
-            if start_colima; then
-              echo "Colima started successfully."
-              break
-            else
-              colima stop -f
-              sleep 10
-              colima delete -f
-              if [ $i -eq $ATTEMPT_LIMIT ]; then
-                exit 1
-              fi
-              sleep 10
-            fi
-          done
-
-          # For testcontainers to find the Colima socket
-          # https://github.com/abiosoft/colima/blob/main/docs/FAQ.md#cannot-connect-to-the-docker-daemon-at-unixvarrundockersock-is-the-docker-daemon-running
-          sudo ln -sf $HOME/.colima/default/docker.sock /var/run/docker.sock
-      - name: Build Environment
-        run: make build
-      - name: Run Tests
-        run: poetry run pytest --forked --cov=agenthub --cov=openhands --cov-report=xml ./tests/unit
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
   # Run python unit tests on Linux
   test-on-linux:
     name: Python Unit Tests on Linux
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     env:
       INSTALL_DOCKER: '0' # Set to '0' to skip Docker installation
     strategy:
       matrix:
-        python-version: ['3.11']
+        python-version: ['3.12']
     steps:
       - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Setup Node.js
+        uses: useblacksmith/setup-node@v5
+        with:
+          node-version: '22.x'
+      - name: Install poetry via pipx
+        run: pipx install poetry
+      - name: Set up Python
+        uses: useblacksmith/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'poetry'
+      - name: Install Python dependencies using Poetry
+        run: poetry install --with dev,test,runtime
+      - name: Build Environment
+        run: make build
+      - name: Run Unit Tests
+        run: poetry run pytest --forked -n auto -svv ./tests/unit
+      - name: Run Runtime Tests with CLIRuntime
+        run: TEST_RUNTIME=cli poetry run pytest -svv tests/runtime/test_bash.py
+
+  # Run specific Windows python tests
+  test-on-windows:
+    name: Python Tests on Windows
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ['3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pipx
+        run: pip install pipx
       - name: Install poetry via pipx
         run: pipx install poetry
       - name: Set up Python
@@ -115,12 +71,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: 'poetry'
       - name: Install Python dependencies using Poetry
-        run: poetry install --without evaluation,llama-index
-      - name: Build Environment
-        run: make build
-      - name: Run Tests
-        run: poetry run pytest --forked --cov=agenthub --cov=openhands --cov-report=xml -svv ./tests/unit
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        run: poetry install --with dev,test,runtime
+      - name: Run Windows unit tests
+        run: poetry run pytest -svv tests/unit/test_windows_bash.py
         env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          DEBUG: "1"
+      - name: Run Windows runtime tests with LocalRuntime
+        run: $env:TEST_RUNTIME="local"; poetry run pytest -svv tests/runtime/test_bash.py
+        env:
+          TEST_RUNTIME: local
+          DEBUG: "1"

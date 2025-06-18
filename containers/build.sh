@@ -1,13 +1,43 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -eo pipefail
 
-image_name=$1
-org_name=$2
+# Initialize variables with default values
+image_name=""
+org_name=""
 push=0
-if [[ $3 == "--push" ]]; then
-  push=1
+load=0
+tag_suffix=""
+dry_run=0
+
+# Function to display usage information
+usage() {
+    echo "Usage: $0 -i <image_name> [-o <org_name>] [--push] [--load] [-t <tag_suffix>] [--dry]"
+    echo "  -i: Image name (required)"
+    echo "  -o: Organization name"
+    echo "  --push: Push the image"
+    echo "  --load: Load the image"
+    echo "  -t: Tag suffix"
+    echo "  --dry: Don't build, only create build-args.json"
+    exit 1
+}
+
+# Parse command-line options
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -i) image_name="$2"; shift 2 ;;
+        -o) org_name="$2"; shift 2 ;;
+        --push) push=1; shift ;;
+        --load) load=1; shift ;;
+        -t) tag_suffix="$2"; shift 2 ;;
+        --dry) dry_run=1; shift ;;
+        *) usage ;;
+    esac
+done
+# Check if required arguments are provided
+if [[ -z "$image_name" ]]; then
+    echo "Error: Image name is required."
+    usage
 fi
-tag_suffix=$4
 
 echo "Building: $image_name"
 tags=()
@@ -17,10 +47,10 @@ OPENHANDS_BUILD_VERSION="dev"
 cache_tag_base="buildcache"
 cache_tag="$cache_tag_base"
 
-if [[ -n $GITHUB_SHA ]]; then
-  git_hash=$(git rev-parse --short "$GITHUB_SHA")
+if [[ -n $RELEVANT_SHA ]]; then
+  git_hash=$(git rev-parse --short "$RELEVANT_SHA")
   tags+=("$git_hash")
-  tags+=("$GITHUB_SHA")
+  tags+=("$RELEVANT_SHA")
 fi
 
 if [[ -n $GITHUB_REF_NAME ]]; then
@@ -71,9 +101,9 @@ if [[ -n "$org_name" ]]; then
   DOCKER_ORG="$org_name"
 fi
 
-# If $DOCKER_IMAGE_HASH_TAG is set, add it to the tags
-if [[ -n "$DOCKER_IMAGE_HASH_TAG" ]]; then
-  tags+=("$DOCKER_IMAGE_HASH_TAG")
+# If $DOCKER_IMAGE_SOURCE_TAG is set, add it to the tags
+if [[ -n "$DOCKER_IMAGE_SOURCE_TAG" ]]; then
+  tags+=("$DOCKER_IMAGE_SOURCE_TAG")
 fi
 # If $DOCKER_IMAGE_TAG is set, add it to the tags
 if [[ -n "$DOCKER_IMAGE_TAG" ]]; then
@@ -86,23 +116,67 @@ echo "Repo: $DOCKER_REPOSITORY"
 echo "Base dir: $DOCKER_BASE_DIR"
 
 args=""
+full_tags=()
 for tag in "${tags[@]}"; do
   args+=" -t $DOCKER_REPOSITORY:$tag"
+  full_tags+=("$DOCKER_REPOSITORY:$tag")
 done
+
 
 if [[ $push -eq 1 ]]; then
   args+=" --push"
   args+=" --cache-to=type=registry,ref=$DOCKER_REPOSITORY:$cache_tag,mode=max"
 fi
 
+if [[ $load -eq 1 ]]; then
+  args+=" --load"
+fi
+
 echo "Args: $args"
+
+# Modify the platform selection based on --load flag
+if [[ $load -eq 1 ]]; then
+  # When loading, build only for the current platform
+  platform=$(docker version -f '{{.Server.Os}}/{{.Server.Arch}}')
+else
+  # For push or without load, build for multiple platforms
+  platform="linux/amd64,linux/arm64"
+fi
+if [[ $dry_run -eq 1 ]]; then
+  echo "Dry Run is enabled. Writing build config to docker-build-dry.json"
+  jq -n \
+    --argjson tags "$(printf '%s\n' "${full_tags[@]}" | jq -R . | jq -s .)" \
+    --arg platform "$platform" \
+    --arg openhands_build_version "$OPENHANDS_BUILD_VERSION" \
+    --arg dockerfile "$dir/Dockerfile" \
+    '{
+      tags: $tags,
+      platform: $platform,
+      build_args: [
+        "OPENHANDS_BUILD_VERSION=" + $openhands_build_version
+      ],
+      dockerfile: $dockerfile
+    }' > docker-build-dry.json
+
+    exit 0
+fi
+
+
+
+echo "Building for platform(s): $platform"
 
 docker buildx build \
   $args \
   --build-arg OPENHANDS_BUILD_VERSION="$OPENHANDS_BUILD_VERSION" \
   --cache-from=type=registry,ref=$DOCKER_REPOSITORY:$cache_tag \
   --cache-from=type=registry,ref=$DOCKER_REPOSITORY:$cache_tag_base-main \
-  --platform linux/amd64,linux/arm64 \
+  --platform $platform \
   --provenance=false \
   -f "$dir/Dockerfile" \
   "$DOCKER_BASE_DIR"
+
+# If load was requested, print the loaded images
+if [[ $load -eq 1 ]]; then
+  echo "Local images built:"
+  docker images "$DOCKER_REPOSITORY" --format "{{.Repository}}:{{.Tag}}"
+fi

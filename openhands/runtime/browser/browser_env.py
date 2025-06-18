@@ -1,6 +1,4 @@
 import atexit
-import base64
-import io
 import json
 import multiprocessing
 import time
@@ -9,13 +7,14 @@ import uuid
 import browsergym.core  # noqa F401 (we register the openended task as a gym environment)
 import gymnasium as gym
 import html2text
-import numpy as np
 import tenacity
-from browsergym.utils.obs import flatten_dom_to_str
-from PIL import Image
+from browsergym.utils.obs import flatten_dom_to_str, overlay_som
 
 from openhands.core.exceptions import BrowserInitException
 from openhands.core.logger import openhands_logger as logger
+from openhands.runtime.browser.base64 import image_to_png_base64_url
+from openhands.utils.shutdown_listener import should_continue, should_exit
+from openhands.utils.tenacity_stop import stop_if_should_exit
 
 BROWSER_EVAL_GET_GOAL_ACTION = 'GET_EVAL_GOAL'
 BROWSER_EVAL_GET_REWARDS_ACTION = 'GET_EVAL_REWARDS'
@@ -38,7 +37,7 @@ class BrowserEnv:
         self.init_browser()
         atexit.register(self.close)
 
-    def get_html_text_converter(self):
+    def get_html_text_converter(self) -> html2text.HTML2Text:
         html_text_converter = html2text.HTML2Text()
         # ignore links and images
         html_text_converter.ignore_links = False
@@ -51,11 +50,11 @@ class BrowserEnv:
 
     @tenacity.retry(
         wait=tenacity.wait_fixed(1),
-        stop=tenacity.stop_after_attempt(5),
+        stop=tenacity.stop_after_attempt(5) | stop_if_should_exit(),
         retry=tenacity.retry_if_exception_type(BrowserInitException),
     )
-    def init_browser(self):
-        logger.info('Starting browser env...')
+    def init_browser(self) -> None:
+        logger.debug('Starting browser env...')
         try:
             self.process = multiprocessing.Process(target=self.browser_process)
             self.process.start()
@@ -63,15 +62,22 @@ class BrowserEnv:
             logger.error(f'Failed to start browser process: {e}')
             raise
 
-        if not self.check_alive():
+        if not self.check_alive(timeout=200):
             self.close()
             raise BrowserInitException('Failed to start browser environment.')
 
-    def browser_process(self):
+    def browser_process(self) -> None:
         if self.eval_mode:
             assert self.browsergym_eval_env is not None
             logger.info('Initializing browser env for web browsing evaluation.')
-            if 'webarena' in self.browsergym_eval_env:
+            if not self.browsergym_eval_env.startswith('browsergym/'):
+                self.browsergym_eval_env = 'browsergym/' + self.browsergym_eval_env
+            if 'visualwebarena' in self.browsergym_eval_env:
+                import browsergym.visualwebarena  # noqa F401 register visualwebarena tasks as gym environments
+                import nltk
+
+                nltk.download('punkt_tab')
+            elif 'webarena' in self.browsergym_eval_env:
                 import browsergym.webarena  # noqa F401 register webarena tasks as gym environments
             elif 'miniwob' in self.browsergym_eval_env:
                 import browsergym.miniwob  # noqa F401 register miniwob tasks as gym environments
@@ -79,7 +85,7 @@ class BrowserEnv:
                 raise ValueError(
                     f'Unsupported browsergym eval env: {self.browsergym_eval_env}'
                 )
-            env = gym.make(self.browsergym_eval_env)
+            env = gym.make(self.browsergym_eval_env, tags_to_mark='all', timeout=100000)
         else:
             env = gym.make(
                 'browsergym/openended',
@@ -87,26 +93,37 @@ class BrowserEnv:
                 wait_for_user_message=False,
                 headless=True,
                 disable_env_checker=True,
+                tags_to_mark='all',
             )
-
         obs, info = env.reset()
 
+        logger.info('Successfully called env.reset')
         # EVAL ONLY: save the goal into file for evaluation
         self.eval_goal = None
+        self.goal_image_urls = []
         self.eval_rewards: list[float] = []
         if self.eval_mode:
-            logger.info(f"Browsing goal: {obs['goal']}")
             self.eval_goal = obs['goal']
-
+            if 'goal_object' in obs:
+                if len(obs['goal_object']) > 0:
+                    self.eval_goal = obs['goal_object'][0]['text']
+                for message in obs['goal_object']:
+                    if message['type'] == 'image_url':
+                        image_src = message['image_url']
+                        if isinstance(image_src, dict):
+                            image_src = image_src['url']
+                        self.goal_image_urls.append(image_src)
+            logger.debug(f'Browsing goal: {self.eval_goal}')
         logger.info('Browser env started.')
-        while True:
+
+        while should_continue():
             try:
                 if self.browser_side.poll(timeout=0.01):
                     unique_request_id, action_data = self.browser_side.recv()
 
                     # shutdown the browser environment
                     if unique_request_id == 'SHUTDOWN':
-                        logger.info('SHUTDOWN recv, shutting down browser env...')
+                        logger.debug('SHUTDOWN recv, shutting down browser env...')
                         env.close()
                         return
                     elif unique_request_id == 'IS_ALIVE':
@@ -116,7 +133,13 @@ class BrowserEnv:
                     # EVAL ONLY: Get evaluation info
                     if action_data['action'] == BROWSER_EVAL_GET_GOAL_ACTION:
                         self.browser_side.send(
-                            (unique_request_id, {'text_content': self.eval_goal})
+                            (
+                                unique_request_id,
+                                {
+                                    'text_content': self.eval_goal,
+                                    'image_content': self.goal_image_urls,
+                                },
+                            )
                         )
                         continue
                     elif action_data['action'] == BROWSER_EVAL_GET_REWARDS_ACTION:
@@ -139,40 +162,49 @@ class BrowserEnv:
                     html_str = flatten_dom_to_str(obs['dom_object'])
                     obs['text_content'] = self.html_text_converter.handle(html_str)
                     # make observation serializable
-                    obs['screenshot'] = self.image_to_png_base64_url(obs['screenshot'])
+                    obs['set_of_marks'] = image_to_png_base64_url(
+                        overlay_som(
+                            obs['screenshot'], obs.get('extra_element_properties', {})
+                        ),
+                        add_data_prefix=True,
+                    )
+                    obs['screenshot'] = image_to_png_base64_url(
+                        obs['screenshot'], add_data_prefix=True
+                    )
                     obs['active_page_index'] = obs['active_page_index'].item()
                     obs['elapsed_time'] = obs['elapsed_time'].item()
                     self.browser_side.send((unique_request_id, obs))
             except KeyboardInterrupt:
-                logger.info('Browser env process interrupted by user.')
+                logger.debug('Browser env process interrupted by user.')
                 try:
                     env.close()
                 except Exception:
                     pass
                 return
 
-    def step(self, action_str: str, timeout: float = 30) -> dict:
+    def step(self, action_str: str, timeout: float = 100) -> dict:
         """Execute an action in the browser environment and return the observation."""
         unique_request_id = str(uuid.uuid4())
         self.agent_side.send((unique_request_id, {'action': action_str}))
         start_time = time.time()
         while True:
-            if time.time() - start_time > timeout:
+            if should_exit() or time.time() - start_time > timeout:
                 raise TimeoutError('Browser environment took too long to respond.')
             if self.agent_side.poll(timeout=0.01):
                 response_id, obs = self.agent_side.recv()
                 if response_id == unique_request_id:
-                    return obs
+                    return dict(obs)
 
-    def check_alive(self, timeout: float = 60):
+    def check_alive(self, timeout: float = 60) -> bool:
         self.agent_side.send(('IS_ALIVE', None))
         if self.agent_side.poll(timeout=timeout):
             response_id, _ = self.agent_side.recv()
             if response_id == 'ALIVE':
                 return True
-            logger.info(f'Browser env is not alive. Response ID: {response_id}')
+            logger.debug(f'Browser env is not alive. Response ID: {response_id}')
+        return False
 
-    def close(self):
+    def close(self) -> None:
         if not self.process.is_alive():
             return
         try:
@@ -189,43 +221,5 @@ class BrowserEnv:
                     self.process.join(5)  # Wait for the process to terminate
             self.agent_side.close()
             self.browser_side.close()
-        except Exception:
-            logger.error('Encountered an error when closing browser env', exc_info=True)
-
-    @staticmethod
-    def image_to_png_base64_url(
-        image: np.ndarray | Image.Image, add_data_prefix: bool = False
-    ):
-        """Convert a numpy array to a base64 encoded png image url."""
-        if isinstance(image, np.ndarray):
-            image = Image.fromarray(image)
-        if image.mode in ('RGBA', 'LA'):
-            image = image.convert('RGB')
-        buffered = io.BytesIO()
-        image.save(buffered, format='PNG')
-
-        image_base64 = base64.b64encode(buffered.getvalue()).decode()
-        return (
-            f'data:image/png;base64,{image_base64}'
-            if add_data_prefix
-            else f'{image_base64}'
-        )
-
-    @staticmethod
-    def image_to_jpg_base64_url(
-        image: np.ndarray | Image.Image, add_data_prefix: bool = False
-    ):
-        """Convert a numpy array to a base64 encoded jpeg image url."""
-        if isinstance(image, np.ndarray):
-            image = Image.fromarray(image)
-        if image.mode in ('RGBA', 'LA'):
-            image = image.convert('RGB')
-        buffered = io.BytesIO()
-        image.save(buffered, format='JPEG')
-
-        image_base64 = base64.b64encode(buffered.getvalue()).decode()
-        return (
-            f'data:image/jpeg;base64,{image_base64}'
-            if add_data_prefix
-            else f'{image_base64}'
-        )
+        except Exception as e:
+            logger.error(f'Encountered an error when closing browser env: {e}')

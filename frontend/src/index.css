@@ -4,18 +4,19 @@
   --bg-input: #393939;
   --bg-workspace: #1f2228;
   --border: #3c3c4a;
-  --text-editor-base: #9099AC;
-  --text-editor-active:#C4CBDA;
-  --bg-editor-sidebar: #24272E;
-  --bg-editor-active: #31343D;
-  --border-editor-sidebar: #3C3C4A;
-  background-color: var(--neutral-900) !important;
+  --text-editor-base: #9099ac;
+  --text-editor-active: #c4cbda;
+  --bg-editor-sidebar: #24272e;
+  --bg-editor-active: #31343d;
+  --border-editor-sidebar: #3c3c4a;
+  background-color: var(--base) !important;
   --bg-neutral-muted: #afb8c133;
 }
 
 body {
   margin: 0;
-  font-family: -apple-system, "SF Pro", BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+  font-family:
+    -apple-system, "SF Pro", BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
     "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
     sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -23,8 +24,8 @@ body {
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
-    monospace;
+  font-family:
+    source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
 }
 
 .markdown-body code {
@@ -32,8 +33,11 @@ code {
   margin: 0;
   font-size: 85%;
   white-space: break-spaces;
-  background-color: var(--bg-neutral-muted);
-  border-radius: 6px;
+  background-color: #2a3038;
+  border-radius: 4px;
+  color: #e6edf3;
+  border: 1px solid #30363d;
+  letter-spacing: -0.2px;
 }
 
 .markdown-body pre code {
@@ -45,22 +49,17 @@ code {
   white-space: pre-wrap; /* Handles line breaks */
 }
 
-.markdown-body ol {
-  list-style-type: decimal; /* Handles numbered lists */
-  margin-left: 20px;
-  padding-left: 0.5em; /* Adds some indentation */
-}
-
-.markdown-body ul {
-  list-style-type: disc; /* Handles bullet points */
-  margin-left: 20px;
-  padding-left: 0.5em; /* Adds some indentation */
-}
-
 .markdown-body th {
   text-align: left;
 }
 
-.markdown-body th, .markdown-body td {
+.markdown-body th,
+.markdown-body td {
   padding: 0.1rem 1rem;
+}
+
+/* Fast smooth scrolling for chat interface */
+.fast-smooth-scroll {
+  scroll-behavior: smooth;
+  scroll-timeline: 100ms;
 }

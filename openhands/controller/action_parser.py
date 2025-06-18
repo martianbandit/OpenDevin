@@ -1,6 +1,17 @@
 from abc import ABC, abstractmethod
+from typing import Any
 
 from openhands.events.action import Action
+
+
+class ActionParseError(Exception):
+    """Exception raised when the response from the LLM cannot be parsed into an action."""
+
+    def __init__(self, error: str):
+        self.error = error
+
+    def __str__(self) -> str:
+        return self.error
 
 
 class ResponseParser(ABC):
@@ -10,16 +21,16 @@ class ResponseParser(ABC):
 
     def __init__(
         self,
-    ):
+    ) -> None:
         # Need pay attention to the item order in self.action_parsers
-        self.action_parsers = []
+        self.action_parsers: list[ActionParser] = []
 
     @abstractmethod
-    def parse(self, response: str) -> Action:
+    def parse(self, response: Any) -> Action:
         """Parses the action from the response from the LLM.
 
         Parameters:
-        - response (str): The response from the LLM.
+        - response: The response from the LLM, which can be a string or a dictionary.
 
         Returns:
         - action (Action): The action parsed from the response.
@@ -27,11 +38,11 @@ class ResponseParser(ABC):
         pass
 
     @abstractmethod
-    def parse_response(self, response) -> str:
+    def parse_response(self, response: Any) -> str:
         """Parses the action from the response from the LLM.
 
         Parameters:
-        - response (str): The response from the LLM.
+        - response: The response from the LLM, which can be a string or a dictionary.
 
         Returns:
         - action_str (str): The action str parsed from the response.

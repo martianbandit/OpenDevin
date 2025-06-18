@@ -7,13 +7,16 @@ class RuntimeBuilder(abc.ABC):
         self,
         path: str,
         tags: list[str],
+        platform: str | None = None,
+        extra_build_args: list[str] | None = None,
     ) -> str:
-        """
-        Build the runtime image.
+        """Build the runtime image.
 
         Args:
             path (str): The path to the runtime image's build directory.
             tags (list[str]): The tags to apply to the runtime image (e.g., ["repo:my-repo", "sha:my-sha"]).
+            platform (str, optional): The target platform for the build. Defaults to None.
+            extra_build_args (list[str], optional): Additional build arguments to pass to the builder. Defaults to None.
 
         Returns:
             str: The name:tag of the runtime image after build (e.g., "repo:sha").
@@ -21,17 +24,17 @@ class RuntimeBuilder(abc.ABC):
                 registry prefix). This should be used for subsequent use (e.g., `docker run`).
 
         Raises:
-            RuntimeError: If the build failed.
+            AgentRuntimeBuildError: If the build failed.
         """
         pass
 
     @abc.abstractmethod
-    def image_exists(self, image_name: str) -> bool:
-        """
-        Check if the runtime image exists.
+    def image_exists(self, image_name: str, pull_from_repo: bool = True) -> bool:
+        """Check if the runtime image exists.
 
         Args:
             image_name (str): The name of the runtime image (e.g., "repo:sha").
+            pull_from_repo (bool): Whether to pull from the remote repo if the image not present locally
 
         Returns:
             bool: Whether the runtime image exists.
